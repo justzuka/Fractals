@@ -1,0 +1,123 @@
+// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel CSMain
+#pragma kernel Trail
+
+// Create a RenderTexture with enableRandomWrite flag and set it
+// with cs.SetTexture
+
+
+float Resolution;
+
+float width;
+float height;
+
+float random(float2 co) {
+    return(frac(sin(dot(co.xy, float2(12.9898, 78.233))) * 43758.5453)) * 1;
+}
+
+uint hash(uint state) {
+    state ^= 2747636419u;
+    state *= 2654435769u;
+    state ^= state >> 16;
+    state *= 2654435769u;
+    state ^= state >> 16;
+    state *= 2654435769u;
+    return state;
+}
+
+struct Mover {
+    float2 pos;
+    float angle;
+};
+RWStructuredBuffer<Mover> movers;
+int moverNum;
+RWTexture2D<float4> Result;
+float moveSpeed;
+float deltaTime;
+
+[numthreads(16,1,1)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= moverNum) {
+        return;
+    }
+    int index = id.x;
+    Mover movr = movers[index];
+    float rand = random(float2(movr.pos.x,movr.pos.y) );
+
+
+
+
+
+    float2 dir = float2( cos(movr.angle) , sin(movr.angle) );
+    
+    float2 newPos = movr.pos + dir * moveSpeed * deltaTime;
+    
+    if (newPos.x < 0 || newPos.x >= width
+        || newPos.y < 0 || newPos.y >= height) {
+
+        newPos.x = min(width - 0.1, max(0, newPos.x));
+        newPos.y = min(height - 0.1, max(0, newPos.y));
+        movers[index].angle = (rand) * 2 * 3.14159;
+    }
+
+    movers[index].pos = newPos;
+    float r = 76/255;
+    float g = 1;
+    float b = 1;
+    Result[int2(newPos.x, newPos.y)] = float4(r,g,b,1);
+
+    // TODO: insert actual code here!
+
+    //float x = id.x / Resolution;
+    //float y = id.y / Resolution;
+
+    //Result[id.xy] = float4(x, 0, y, 0);
+
+   /* if (id.x < 0 || id.x >= width || id.y < 0 || id.y >= height) {
+        return;
+    }
+    int pixelIndex = id.y * width + id.x;
+    
+    uint rand = hash(pixelIndex);
+    float val = rand / 4294967295.0;
+    
+    Result[id.xy] = float4(val,val,val,val);*/
+}
+
+RWTexture2D<float4> TrailPro;
+float dissSpeed;
+float diffSpeed;
+[numthreads(8,8, 1)]
+void Trail(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x < 0 || id.x >= width || id.y < 0 || id.y >= height) {
+        return;
+    }
+    
+    float4 original = TrailPro[id.xy];
+
+    float4 sum = 0;
+    int diff = 1;
+    for (int x = -diff; x <= diff; x++) {
+        for (int y = -diff; y <= diff; y++) {
+            int newX = id.x + x;
+            int newY = id.y + y;
+            if (newX < 0 || newX >= width
+                || newY < 0 || newY >= height) {
+                //invalid
+            }
+            else {
+                sum += TrailPro[int2(newX, newY)];
+            }
+        }
+    }
+
+    
+    float4 diffVal = lerp(original, sum / 9, diffSpeed * deltaTime);
+
+
+    float4 newVal = max(0, diffVal - dissSpeed * deltaTime);
+
+    TrailPro[id.xy] = newVal;
+}

@@ -1,0 +1,279 @@
+// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel CSMain
+
+// Create a RenderTexture with enableRandomWrite flag and set it
+// with cs.SetTexture
+
+
+
+RWTexture2D<float4> Result;
+
+int width;
+int height;
+int resolution;
+
+
+
+float Time;
+
+float4x4 _CameraToWorld;
+float4x4 _CameraInverseProjection;
+
+float power;
+float smoothMinVal;
+
+struct Ray
+{
+    float3 origin;
+    float3 direction;
+};
+
+struct RayHit
+{
+    float3 position;
+    float distance;
+    float3 normal;
+};
+
+RayHit CreateRayHit()
+{
+    RayHit hit;
+    hit.position = float3(0.0f, 0.0f, 0.0f);
+    hit.distance = 1.#INF;
+    hit.normal = float3(0.0f, 0.0f, 0.0f);
+    return hit;
+}
+Ray CreateRay(float3 origin, float3 direction)
+{
+    Ray ray;
+    ray.origin = origin;
+    ray.direction = direction;
+    return ray;
+}
+
+Ray CreateCameraRay(float2 uv)
+{
+    // Transform the camera origin to world space
+    float3 origin = mul(_CameraToWorld, float4(0.0f, 0.0f, 0.0f, 1.0f)).xyz;
+
+    // Invert the perspective projection of the view-space position
+    float3 direction = mul(_CameraInverseProjection, float4(uv, 0.0f, 1.0f)).xyz;
+    // Transform the direction from camera to world space and normalize
+    direction = mul(_CameraToWorld, float4(direction, 0.0f)).xyz;
+    direction = normalize(direction);
+    return CreateRay(origin, direction);
+
+}
+
+float smoothMin(float dst1, float dst2, float k) {
+    float h = max(k - abs(dst1 - dst2), 0) / k;
+
+    return min(dst1, dst2) - h * h * h * k * 1 / 6.0;
+}
+
+float2 GetDist(float3 position) {
+   /* float4 sphere = float4(0, 0.5, 6, 0.7);
+    float4 sphere2 = float4(1, 0.5, 6, 1.4);
+    float4 sphere3 = float4(-0.8, 0.8, 6.4, 1);
+
+    sphere2.x += sin(Time) ;
+    sphere2.z += sin(Time);
+
+    sphere.y += sin(Time) + 0.5;
+
+    float sphereDist = length(p - sphere.xyz) - sphere.w;
+    float sphere2Dist = length(p - sphere2.xyz) - sphere2.w;
+    float sphere3Dist = length(p - sphere3.xyz) - sphere3.w;
+
+    float planeDist = p.y;
+
+    float minDist = smoothMin(sphereDist, sphere2Dist,smoothMinVal);
+
+    minDist = smoothMin(minDist, sphere3Dist,smoothMinVal);
+    minDist = smoothMin(minDist, planeDist, smoothMinVal);
+
+    return minDist;*/
+     
+    //mandelbulb fractal
+
+    float3 z = position;
+    float dr = 1.0;
+    float r = 0.0;
+    int iterations = 0;
+
+    for (int i = 0; i < 15; i++) {
+        iterations = i;
+        r = length(z);
+
+        if (r > 2) {
+            break;
+        }
+
+        // convert to polar coordinates
+        float theta = acos(z.z / r);
+        float phi = atan2(z.y, z.x);
+        dr = pow(r, power - 1.0) * power * dr + 1.0;
+
+        // scale and rotate the point
+        float zr = pow(r, power);
+        theta = theta * power;
+        phi = phi * power;
+
+        // convert back to cartesian coordinates
+        z = zr * float3(sin(theta) * cos(phi), sin(phi) * sin(theta), cos(theta));
+        z += position;
+    }
+    float dst = 0.5 * log(r) * r / dr;
+    return float2(iterations, dst * 1);
+}
+
+
+float3 RayMarch(float3 origin,float3 direction) {
+    float d = 0;
+    float ed = 0;
+    float marchStep = 0;
+    int MAX_STEPS = 40;
+    float MAX_DIST = 6;
+    float SURF_DIST = 0.001;
+
+    for (int i = 0; i < MAX_STEPS; i++) {
+        marchStep++;
+        float3 p = origin + direction * d;
+
+        float2 val = GetDist(p);
+        float ds = val.y;
+            ed = val.x;
+        d += ds;
+        if (d > MAX_DIST) {
+            d = 1000;
+            break;
+        }
+        if (d < SURF_DIST) {
+            break;
+        }
+
+    }
+
+    return float3(ed, d,marchStep);
+}
+
+
+float3 GetNormal(float3 p) {
+    float2 e = float2(0.001, 0);
+    float d = GetDist(p).y;
+
+    return normalize(float3(d - GetDist(p - e.xyy).y,d - GetDist(p - e.yxy).y,d - GetDist(p - e.yyx).y));
+}
+
+float GetShadowValue(float3 origin, float3 direction,float k) {
+  
+    int MAX_STEPS = 10;
+    
+    float result = 1.0;
+
+    int count = 0;
+
+    for (float i = 1; i < MAX_STEPS;) {
+        float h = GetDist(origin + direction * i).y;
+
+        if (h < 0.001) {
+            return 0.0;
+        }
+        result = min(result, h * k / i);
+        i += h;
+        count++;
+        if (count >= 90) {
+            break;
+        }
+    }
+
+    return result;
+}
+
+float GetLight(float3 p) {
+    //Vector3(-0.600000024, -0.100000001, -0.200000003)
+    float3 light = float3(-0.6, 5, -0.2);
+    float3 vec1 = normalize(light - p);
+    float3 normal = GetNormal(p);
+
+    float dif = dot(vec1, normal);
+
+    //another shadow
+   /* float d = GetShadowValue(p + normal * 0.02, vec1,8)*0.5 + 0.5;
+    d = max(0.0, d);
+    dif *= d;
+
+    float3 light2 = float3(0.6, 1, 0.2);
+    float3 vec2 = normalize(light2 - p);
+
+    d = GetShadowValue(p + normal * 0.02, vec2, 8) * 0.5 + 0.5;
+    d = max(0.0, d);
+    dif *= d;*/
+
+    //shadow
+    /*float d = RayMarch(p + normal * 0.02, vec1);
+
+    
+    if (d < length(light - p)) {
+        dif *= .3;
+    }*/
+
+    //shadow
+    return dif ;
+
+}
+
+
+[numthreads(8,8,1)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+    // TODO: insert actual code here!
+
+    float2 uv = id.xy / float2(width, height) * 2 - 1;
+
+    Ray ray = CreateCameraRay(uv);
+
+    float3 val = RayMarch(ray.origin, ray.direction);
+    float d = val.y;
+    
+    
+    float3 p = ray.origin + ray.direction * d;
+    float dif = GetLight(p);
+    float marchStep = val.z;
+    float blackAndWhite = .1;
+    //
+    
+    /*
+    float3 colourAMix = float3(.1, 1, .1);
+    float3 colourBMix = float3(1, .1, .1);
+    float epsilon = 0.001;
+    float escapeIterations = val.x;
+    float3 normal = GetNormal(ray.origin - ray.direction * epsilon * 2);
+
+    float colourA = saturate(dif);
+    float colourB = saturate(escapeIterations / 16.0);
+    float3 colourMix = saturate(colourA * colourAMix + colourB * colourBMix);
+
+    float4 result = float4(colourMix.xyz, 1);*/
+    //
+    
+    float sub = d / 2.2;
+
+    //sub = floor(sub * 5 + 0.5) / 5;
+    dif = 1 - sub;
+
+
+  
+
+    float4 result  = float4(dif, dif, dif,1);
+
+    
+
+    //float4 result = float4(color, 1);
+
+    
+    
+    float dark = 24;
+    float rim = marchStep / dark;
+    Result[id.xy] = lerp(result, 1, blackAndWhite) * rim;
+}

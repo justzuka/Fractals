@@ -1,0 +1,294 @@
+// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel CSMain
+
+RWTexture2D<float4> Result;
+
+int width;
+int height;
+int resolution;
+float4x4 _CameraToWorld;
+float4x4 _CameraInverseProjection;
+
+float power;
+float3 LightDirection;
+
+float3 color1Power;
+float3 color2Power;
+
+float beforeRotateX;
+float beforeRotateY;
+float beforeRotateZ;
+
+float afterRotateX;
+float afterRotateY;
+float afterRotateZ;
+
+int Iterations;
+
+float dark;
+
+float minDist; // = 0.005f;
+static const float maxDist = 150;
+int maxStepCount; // = 150;
+
+
+//float power;
+//float smoothMinVal;
+
+float3 rotate(float3 vec);
+float3x3 rotateX(float theta) {
+    float c = cos(theta);
+    float s = sin(theta);
+    return float3x3(
+        float3(1, 0, 0),
+        float3(0, c, -s),
+        float3(0, s, c)
+        );
+}
+
+float3x3 rotateY(float theta) {
+    float c = cos(theta);
+    float s = sin(theta);
+    return float3x3(
+        float3(c, 0, s),
+        float3(0, 1, 0),
+        float3(-s, 0, c)
+        );
+}
+
+// Rotation matrix around the Z axis.
+float3x3 rotateZ(float theta) {
+    float c = cos(theta);
+    float s = sin(theta);
+    return float3x3(
+        float3(c, -s, 0),
+        float3(s, c, 0),
+        float3(0, 0, 1)
+        );
+}
+
+float3x3 identity() {
+    return float3x3(
+        float3(1, 0, 0),
+        float3(0, 1, 0),
+        float3(0, 0, 1)
+        );
+}
+
+
+struct Ray
+{
+    float3 origin;
+    float3 direction;
+};
+
+struct RayHit
+{
+    float3 position;
+    float distance;
+    float3 normal;
+};
+
+RayHit CreateRayHit()
+{
+    RayHit hit;
+    hit.position = float3(0.0f, 0.0f, 0.0f);
+    hit.distance = 1.#INF;
+    hit.normal = float3(0.0f, 0.0f, 0.0f);
+    return hit;
+}
+Ray CreateRay(float3 origin, float3 direction)
+{
+    Ray ray;
+    ray.origin = origin;
+    ray.direction = direction;
+    return ray;
+}
+
+Ray CreateCameraRay(float2 uv)
+{
+    // Transform the camera origin to world space
+    float3 origin = mul(_CameraToWorld, float4(0.0f, 0.0f, 0.0f, 1.0f)).xyz;
+
+    // Invert the perspective projection of the view-space position
+    float3 direction = mul(_CameraInverseProjection, float4(uv, 0.0f, 1.0f)).xyz;
+    // Transform the direction from camera to world space and normalize
+    direction = mul(_CameraToWorld, float4(direction, 0.0f)).xyz;
+    direction = normalize(direction);
+    return CreateRay(origin, direction);
+
+}
+
+float smoothMin(float dst1, float dst2, float k) {
+    float h = max(k - abs(dst1 - dst2), 0) / k;
+
+    return min(dst1, dst2) - h * h * h * k * 1 / 6.0;
+}
+
+float2 DE(float3 position) {
+    
+    //float dr = 1.0;
+    //float3 z = position;
+    //float r = 0.0;
+    //int iterations = 0;
+
+    //for (int i = 0; i < 30; i++) {
+    //    
+
+    //    iterations = i;
+    //    r = length(z);
+
+    //    if (r > 2) {
+    //        break;
+    //    }
+
+    //    // convert to polar coordinates
+    //    float theta = acos(z.z / r);
+    //    float phi = atan2(z.y, z.x);
+    //    dr = pow(r, power - 1.0) * power * dr + 1.0;
+
+    //    // scale and rotate the point
+    //    float zr = pow(r, power);
+    //    theta = theta * power;
+    //    phi = phi * power;
+
+    //    // convert back to cartesian coordinates
+    //    z = zr * float3(sin(theta) * cos(phi), sin(phi) * sin(theta), cos(theta));
+    //    
+    //    z += position;
+    //    
+    //    
+    //}
+    //
+    //float dst = 0.5 * log(r) * r / dr ;
+    //return float2(iterations, dst * 1);
+    /*float iterations = 15;
+    float Scale = 2;
+    float3 z = position;
+    float3 a1 = float3(1, 1, 1);
+    float3 a2 = float3(-1, -1, 1);
+    float3 a3 = float3(1, -1, -1);
+    float3 a4 = float3(-1, 1, -1);
+    float3 c;
+    int n = 0;
+    float dist, d;
+    while (n < iterations) {
+        c = a1; dist = length(z - a1);
+        d = length(z - a2); if (d < dist) { c = a2; dist = d; }
+        d = length(z - a3); if (d < dist) { c = a3; dist = d; }
+        d = length(z - a4); if (d < dist) { c = a4; dist = d; }
+        z = Scale * z - c * (Scale - 1.0);
+        n++;
+    }
+
+    float dst = length(z) * pow(Scale, float(-n));
+    return float2(iterations, dst * 1);*/
+    
+    float Offset = 1;
+    float Scale = 2;
+    float3 z = position;
+    int n = 0;
+    while (n < Iterations) {
+        z = mul(rotateZ(beforeRotateZ), z);
+        z = mul(rotateY(beforeRotateY), z);
+        z = mul(rotateX(beforeRotateX), z);
+        if (z.x + z.y < 0) z.xy = -z.yx; // fold 1
+        if (z.x + z.z < 0) z.xz = -z.zx; // fold 2
+        if (z.y + z.z < 0) z.zy = -z.yz; // fold 3	
+        
+        z = mul(rotateZ(afterRotateZ), z);
+        z = mul(rotateY(afterRotateY), z);
+        z = mul(rotateX(afterRotateX), z);
+           
+
+        z = z * Scale - Offset * (Scale - 1.0);
+        n++;
+        
+    }
+    float dst = (length(z)) * pow(Scale, -float(n));
+
+    return float2(Iterations, dst * 1);
+}
+
+float3 rotate(float3 vec) {
+    float x = vec.x;
+    float y = vec.y;
+    float z = vec.z;
+
+    float r = sqrt(x * x + y * y + z * z);
+    float theta = atan(y / x);
+    float phi = acos(z / r);
+
+    theta += power%3.14;
+    phi += 0.001;
+
+    x = r * sin(phi) * cos(theta);
+    y = r * sin(phi) * sin(theta);
+    z = r * cos(phi);
+
+    return float3(x, y, z);
+}
+
+
+
+float3 GetNormal(float3 p) {
+    float2 e = float2(minDist, 0);
+    float d = DE(p).y;
+
+    return normalize(float3(d - DE(p - e.xyy).y, d - DE(p - e.yxy).y, d - DE(p - e.yyx).y));
+}
+
+
+
+
+
+
+[numthreads(8, 8, 1)]
+void CSMain(uint3 id : SV_DispatchThreadID)
+{
+    
+    float2 uv = id.xy / float2(width, height) * 2 - 1;
+    
+    Ray ray = CreateCameraRay(uv);
+    float rayDist = 0;
+    int steps = 0;
+
+    float4 result = float4(.2,.2,.2,1);
+   
+
+    while (rayDist < maxDist && steps <= maxStepCount) {
+        steps++;
+        float2 value = DE(ray.origin);
+
+
+        if (value.y <= minDist) {
+            int ambient = maxStepCount;
+            float3 normal = GetNormal(ray.origin - ray.direction * minDist * 2);
+            normal *= 0.5;
+            normal += 0.5;
+
+            
+
+            float color1 = saturate(dot( LightDirection, normal ));
+            // float aoc =  saturate( 1 - steps / ambient );
+            //float color2 = saturate(value.x / 30);
+            float3 both = saturate(color1 * color1Power );
+
+            result = float4(both , 1);
+
+            break;
+        }
+
+
+
+        rayDist += value.y;
+        ray.origin += ray.direction * value.y;
+    }
+
+
+
+    float gloom = (steps / dark)+0.1;
+ 
+    Result[id.xy] = result * gloom;
+}
+
